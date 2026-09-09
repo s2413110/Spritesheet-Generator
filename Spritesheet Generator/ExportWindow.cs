@@ -77,7 +77,7 @@ public sealed class ExportWindow : Window
     {
         var row = new Grid { Margin = new Thickness(0, 4, 0, 4) }; row.ColumnDefinitions.Add(new ColumnDefinition()); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
         row.Children.Add(new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center });
-        var box = new TextBox { Text = value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) }; Grid.SetColumn(box, 1); row.Children.Add(box); fields.Children.Add(row);
+        var box = new TextBox { Text = value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture) }; Grid.SetColumn(box, 1); row.Children.Add(box); fields.Children.Add(row);
         inputs.Add((box, name, set, min, max, integer)); box.TextChanged += (_, _) => { stale = true; export.IsEnabled = metadata.IsEnabled = false; message.Text = "Settings changed. Update the preview to apply them."; };
     }
     private async Task Generate()
@@ -95,7 +95,7 @@ public sealed class ExportWindow : Window
             // Replace the settings instance so the editor's undo snapshot retains the previous settings.
             Settings = JsonSerializer.Deserialize<SheetSettings>(JsonSerializer.Serialize(Settings))!;
             foreach (var item in parsed) item.Set(item.Value);
-            var snapshot = Project.Deserialize(source.Serialize()); snapshot.Sheet = Settings; SceneRenderer.ValidateExport(snapshot);
+            var snapshot = source.Copy(); snapshot.Sheet = Settings; SceneRenderer.ValidateExport(snapshot);
             busy = true; fields.IsEnabled = false; export.IsEnabled = metadata.IsEnabled = false;
             var sheet = new WriteableBitmap(Settings.PixelWidth, Settings.PixelHeight, 96, 96, PixelFormats.Pbgra32, null);
             int stride = Settings.CellWidth * 4; byte[] pixels = new byte[stride * Settings.CellHeight];
@@ -129,7 +129,7 @@ public sealed class ExportWindow : Window
         if (busy || closed) return;
         action(); var s = source.Sheet;
         double[] values = [s.CellWidth, s.CellHeight, s.Columns, s.Rows, s.Margin, s.Spacing, s.OffsetX, s.OffsetY, s.Scale];
-        for (int i = 0; i < inputs.Count; i++) inputs[i].Input.Text = values[i].ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        for (int i = 0; i < inputs.Count; i++) inputs[i].Input.Text = values[i].ToString("G17", System.Globalization.CultureInfo.InvariantCulture);
         await Generate();
     }
     private void SaveMetadata()

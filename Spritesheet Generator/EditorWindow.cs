@@ -130,9 +130,31 @@ public sealed class EditorWindow : Window
         button.Setters.Add(new Setter(Control.BorderBrushProperty, Brush("#42516A"))); button.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(9, 6, 9, 6))); button.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(2)));
         Resources.Add(typeof(Button), button);
         var text = new Style(typeof(TextBox)); text.Setters.Add(new Setter(Control.BackgroundProperty, Brush("#111823"))); text.Setters.Add(new Setter(Control.ForegroundProperty, Brush("#E4ECF8"))); text.Setters.Add(new Setter(Control.BorderBrushProperty, Brush("#42516A"))); text.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(5))); Resources.Add(typeof(TextBox), text);
-        var list = new Style(typeof(ListBoxItem)); list.Setters.Add(new Setter(Control.ForegroundProperty, Brush("#DCE3F0"))); list.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(6, 7, 4, 7))); Resources.Add(typeof(ListBoxItem), list);
+        var list = ItemAlignmentStyle(typeof(ListBoxItem)); list.Setters.Add(new Setter(Control.ForegroundProperty, Brush("#DCE3F0"))); list.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(6, 7, 4, 7))); Resources.Add(typeof(ListBoxItem), list);
+        hierarchy.ItemContainerStyle = list;
+        var comboItem = ItemAlignmentStyle(typeof(ComboBoxItem));
+        Resources.Add(typeof(ComboBoxItem), comboItem); mode.ItemContainerStyle = comboItem;
         var check = new Style(typeof(CheckBox)); check.Setters.Add(new Setter(Control.ForegroundProperty, Brush("#DCE3F0"))); Resources.Add(typeof(CheckBox), check);
     }
+    private static Style ItemAlignmentStyle(Type type)
+    {
+        // These items have fixed alignment. Theme FindAncestor bindings cannot
+        // resolve while list/inspector rebuilds detach their containers.
+        var style = new Style(type);
+        style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Left));
+        style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
+        return style;
+    }
+    private ListBoxItem ListItem(object content, object? tag = null) => new()
+    {
+        // Assign Style locally before attaching. ItemContainerStyle alone is
+        // cleared by the generator on removal, reinstating theme ancestor bindings.
+        Style = (Style)Resources[typeof(ListBoxItem)], Content = content, Tag = tag
+    };
+    private ComboBoxItem BoneOption(string name, string? id) => new()
+    {
+        Style = (Style)Resources[typeof(ComboBoxItem)], Content = name, Tag = id
+    };
     private static TextBlock Label(string text) => new() { Text = text, FontWeight = FontWeights.SemiBold, Foreground = Brush("#91A2BE"), Margin = new Thickness(0, 8, 0, 10) };
     private static void AddButton(Panel panel, string text, Action action)
     {
@@ -177,7 +199,8 @@ public sealed class EditorWindow : Window
         {
             int depth = 0; var parent = part.ParentId;
             while (parent != null) { depth++; parent = project.Parts.FirstOrDefault(p => p.Id == parent)?.ParentId; }
-            var item = new ListBoxItem { Content = $"{new string(' ', depth * 2)}{(part.IsBone ? "◇" : "▧")}  {part.Name}", Tag = part.Id, ToolTip = part.IsBone ? "Bone" : "Sprite layer" };
+            var item = ListItem($"{new string(' ', depth * 2)}{(part.IsBone ? "◇" : "▧")}  {part.Name}", part.Id);
+            item.ToolTip = part.IsBone ? "Bone" : "Sprite layer";
             hierarchy.Items.Add(item); if (part.Id == selectedId) hierarchy.SelectedItem = item;
         }
         scrub.Maximum = project.FrameCount - 1; rebuilding = false; UpdateTitle(); RefreshInspector(); UpdateFrameLabel(); Render(); DrawTimeline();
@@ -193,13 +216,16 @@ public sealed class EditorWindow : Window
         row.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
         var input = new TextBox { Text = value.ToString("0.###", CultureInfo.InvariantCulture), ToolTip = $"{min} … {max}" }; Grid.SetColumn(input, 1); row.Children.Add(input); host.Children.Add(row);
         double current = value;
+        string committedText = input.Text;
         int version = inspectorVersion;
         void Commit(bool silent = false)
         {
             if (suppressInputCommit || version != inspectorVersion) return;
+            if (input.Text == committedText) return;
             if (!double.TryParse(input.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double next) || !double.IsFinite(next) || next < min || next > max || (integer && next != Math.Truncate(next)))
-            { if (!silent) { input.Text = current.ToString("0.###", CultureInfo.InvariantCulture); Say($"{label}: enter {(integer ? "a whole number" : "a number")} from {min} to {max}."); } return; }
-            if (Math.Abs(next - current) < .000001) return; setter(next); current = next; ResetTextUndo(input);
+            { if (!silent) { input.Text = committedText; Say($"{label}: enter {(integer ? "a whole number" : "a number")} from {min} to {max}."); } return; }
+            if (next != current) setter(next);
+            current = next; committedText = input.Text; ResetTextUndo(input);
         }
         input.Tag = (Action<bool>)Commit;
         input.LostKeyboardFocus += (_, _) => Commit(); input.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); Keyboard.ClearFocus(); e.Handled = true; } };
@@ -243,8 +269,9 @@ public sealed class EditorWindow : Window
             inspector.Children.Add(Label("RIG CONFIGURATION"));
             var config = new StackPanel { IsEnabled = Setup }; inspector.Children.Add(config);
             config.Children.Add(new TextBlock { Text = p.IsBone ? "Parent bone" : "Bind to bone", Margin = new Thickness(0, 0, 0, 5) });
-            var parents = new ComboBox { Margin = new Thickness(0, 0, 0, 8) }; parents.Items.Add(new ComboBoxItem { Content = "None (world)", Tag = null });
-            foreach (var bone in project.Parts.Where(b => b.IsBone && b.Id != p.Id && !project.IsDescendant(b, p.Id))) parents.Items.Add(new ComboBoxItem { Content = bone.Name, Tag = bone.Id });
+            var parents = new ComboBox { Margin = new Thickness(0, 0, 0, 8), ItemContainerStyle = (Style)Resources[typeof(ComboBoxItem)] };
+            parents.Items.Add(BoneOption("None (world)", null));
+            foreach (var bone in project.Parts.Where(b => b.IsBone && b.Id != p.Id && !project.IsDescendant(b, p.Id))) parents.Items.Add(BoneOption(bone.Name, bone.Id));
             parents.SelectedItem = parents.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string?)i.Tag == p.ParentId);
             parents.SelectionChanged += (_, _) => { var id = (parents.SelectedItem as ComboBoxItem)?.Tag as string; if (id != p.ParentId) Change(() => project.Reparent(p, id), true); }; config.Children.Add(parents);
             if (p.IsBone) Number(config, "Bone length", p.Length, 1, 2000, v => Change(() => p.Length = v));
@@ -357,15 +384,7 @@ public sealed class EditorWindow : Window
                 if ((point - origin).Length < 11 || DistanceToSegment(point, origin, tip) < 6) { hit = p; break; }
             }
         }
-        if (hit == null)
-            foreach (var p in project.Parts.AsEnumerable().Reverse().Where(p => !p.IsBone && project.Visible(p, frame, Setup)))
-            {
-                var m = project.World(p, frame, Setup); m.Invert(); var world = World(point);
-                var a = m.Transform(new Point3D(world.X, world.Y, 10000)); var b = m.Transform(new Point3D(world.X, world.Y, -10000));
-                if (Math.Abs(b.Z - a.Z) < .00001) continue;
-                var local = a + (b - a) * (-a.Z / (b.Z - a.Z));
-                if (local.X >= -p.PivotX * p.Width && local.X <= (1 - p.PivotX) * p.Width && local.Y <= p.PivotY * p.Height && local.Y >= (p.PivotY - 1) * p.Height) { hit = p; break; }
-            }
+        if (hit == null) { var world = World(point); hit = renderer.HitSprite(project, frame, Setup, new Point(world.X, world.Y)); }
         selectedId = hit?.Id; Refresh();
         if (hit != null) { dragBefore = Capture(); dragPose = hit.At(frame, Setup); dragging = true; overlay.CaptureMouse(); }
     }
@@ -540,7 +559,10 @@ public sealed class EditorWindow : Window
     private void MoveLayer(int direction)
     {
         if (Selected is not { IsBone: false } p) return;
-        Change(() => { int index = project.Parts.IndexOf(p); int target = Math.Clamp(index + direction, 0, project.Parts.Count - 1); project.Parts.RemoveAt(index); project.Parts.Insert(target, p); }, true);
+        int index = project.Parts.IndexOf(p), target = index + direction;
+        while (target >= 0 && target < project.Parts.Count && project.Parts[target].IsBone) target += direction;
+        if (target < 0 || target >= project.Parts.Count) return;
+        Change(() => { project.Parts.RemoveAt(index); project.Parts.Insert(target, p); }, true);
         Say("Layer order controls equal-depth parts. Depth Z determines overlap when parts rotate in 3D.");
     }
     private bool ConfirmDiscard()
@@ -642,11 +664,13 @@ public sealed class EditorWindow : Window
             var panel = new DockPanel { Margin = new Thickness(18) };
             var note = new TextBlock { Text = "Choose a recovery copy. It opens as an unsaved project so you can inspect it before saving.\n" + autosaves.DirectoryPath + (result.unreadable > 0 ? $"\n{result.unreadable} unreadable copy/copies skipped; previous copies are listed when available." : ""), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
             DockPanel.SetDock(note, Dock.Top); panel.Children.Add(note);
-            var list = new ListBox { ItemsSource = result.entries, SelectedIndex = result.entries.Count > 0 ? 0 : -1, Background = Brush("#1B2230") };
+            var list = new ListBox { Background = Brush("#1B2230"), ItemContainerStyle = (Style)Resources[typeof(ListBoxItem)] };
+            foreach (var entry in result.entries) list.Items.Add(ListItem(entry));
+            list.SelectedIndex = result.entries.Count > 0 ? 0 : -1;
             var buttons = new WrapPanel(); var dialog = Dialog("Recover autosaved project", panel, 740, 460);
             AddButton(buttons, "Restore selected copy", () =>
             {
-                if (list.SelectedItem is not RecoveryEntry entry) return;
+                if (list.SelectedItem is not ListBoxItem { Content: RecoveryEntry entry }) return;
                 try
                 {
                     var copy = autosaves.Read(entry.Path);
@@ -700,6 +724,37 @@ public sealed class EditorWindow : Window
         }
         else if (redo) Redo(); else Undo();
         return true;
+    }
+    internal void VerifyPrecisionAndLayerOrder()
+    {
+        project = new Project(); ResetProject(); project.ReferenceX = 1.23456789; savedState = Capture();
+        var host = new StackPanel(); Number(host, "Reference X", project.ReferenceX, -10000, 10000, v => Change(() => project.ReferenceX = v));
+        var input = (TextBox)((Grid)host.Children[0]).Children[1]; ((Action<bool>)input.Tag)(true);
+        if (project.ReferenceX != 1.23456789 || history.UndoCount != 0) throw new Exception("Focusing or autosaving an untouched numeric field rounds its value and creates an edit.");
+        project.Parts.AddRange([new Part { Name = "Lower" }, new Part { IsBone = true }, new Part { Name = "Upper" }]);
+        selectedId = project.Parts[0].Id; MoveLayer(1);
+        if (project.Parts.Where(p => !p.IsBone).Last().Id != selectedId) throw new Exception("Layer up only moved past a bone, leaving the sprite order unchanged.");
+        dirty = false;
+    }
+    internal async Task VerifyContainerLifecycleAsync()
+    {
+        var list = new ListBox { ItemContainerStyle = (Style)Resources[typeof(ListBoxItem)] };
+        var combo = new ComboBox { ItemContainerStyle = (Style)Resources[typeof(ComboBoxItem)] };
+        var recovery = new RecoveryEntry("test.recovery", "Recovery test", DateTimeOffset.UtcNow, null, false);
+        var item = ListItem(recovery); var option = BoneOption("Root", "root");
+        for (int i = 0; i < 3; i++)
+        {
+            list.Items.Add(item); combo.Items.Add(option); list.SelectedItem = item; combo.SelectedItem = option;
+            list.Measure(new Size(300, 120)); list.Arrange(new Rect(0, 0, 300, 120)); list.UpdateLayout();
+            combo.Measure(new Size(300, 40)); combo.Arrange(new Rect(0, 0, 300, 40)); combo.UpdateLayout();
+            item.ApplyTemplate(); option.ApplyTemplate();
+            if (list.SelectedItem is not ListBoxItem { Content: RecoveryEntry selected } || selected != recovery) throw new Exception("Recovery selection lost its entry.");
+            list.Items.Clear(); combo.Items.Clear();
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            foreach (Control control in new Control[] { item, option })
+                if (control.ReadLocalValue(StyleProperty) is not System.Windows.Style || System.Windows.Data.BindingOperations.IsDataBound(control, Control.HorizontalContentAlignmentProperty) || System.Windows.Data.BindingOperations.IsDataBound(control, Control.VerticalContentAlignmentProperty))
+                    throw new Exception("Detached item lost its explicit alignment style.");
+        }
     }
     internal BitmapSource SmokeSnapshot()
     {

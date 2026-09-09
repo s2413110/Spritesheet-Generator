@@ -27,6 +27,33 @@ public sealed class SceneRenderer
         if (new FileInfo(path).Length > 32 * 1024 * 1024) throw new InvalidDataException("Choose an image smaller than 32 MB.");
         return Convert.ToBase64String(File.ReadAllBytes(path));
     }
+    private static IEnumerable<(Part Part, Matrix3D World)> SpriteTransforms(Project project, double frame, bool setup) =>
+        project.Parts.Where(p => !p.IsBone && p.ImageData != null && project.Visible(p, frame, setup))
+            .Select(p => (Part: p, World: project.World(p, frame, setup)))
+            // WPF writes depth even for transparent texels. Draw far to near so
+            // alpha holes and translucent edges reveal the already-rendered rear.
+            .OrderBy(p => p.World.OffsetZ);
+
+    public Part? HitSprite(Project project, double frame, bool setup, Point point)
+    {
+        foreach (var entry in SpriteTransforms(project, frame, setup).Reverse())
+        {
+            var p = entry.Part; var inverse = entry.World;
+            bool back = entry.World.Transform(new Vector3D(0, 0, 1)).Z < 0;
+            inverse.Invert();
+            var a = inverse.Transform(new Point3D(point.X, point.Y, 10000));
+            var b = inverse.Transform(new Point3D(point.X, point.Y, -10000));
+            if (Math.Abs(b.Z - a.Z) < .00001) continue;
+            var local = a + (b - a) * (-a.Z / (b.Z - a.Z));
+            double u = local.X / p.Width + p.PivotX, v = p.PivotY - local.Y / p.Height;
+            if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
+            var image = new FormatConvertedBitmap(Image(back && p.BackImageData != null ? p.BackImageData : p.ImageData!), PixelFormats.Bgra32, null, 0);
+            var pixel = new byte[4];
+            image.CopyPixels(new Int32Rect((int)(u * image.PixelWidth), (int)(v * image.PixelHeight), 1, 1), pixel, 4, 0);
+            if (pixel[3] > 16) return p;
+        }
+        return null;
+    }
     private Model3DGroup Geometry(Part p)
     {
         var signature = $"{p.Width}/{p.Height}/{p.PivotX}/{p.PivotY}/{p.Thickness}/{p.RoundedDepth}";
@@ -84,10 +111,10 @@ public sealed class SceneRenderer
         viewport.Camera = new OrthographicCamera(new Point3D(-offsetX / zoom, offsetY / zoom, 10000), new Vector3D(0, 0, -1), new Vector3D(0, 1, 0), width / zoom) { NearPlaneDistance = .1, FarPlaneDistance = 20000 };
         var scene = new Model3DGroup();
         scene.Children.Add(new AmbientLight(Colors.White));
-        foreach (var p in project.Parts.Where(p => !p.IsBone && p.ImageData != null && project.Visible(p, frame, setup)))
+        foreach (var entry in SpriteTransforms(project, frame, setup))
         {
-            var group = new Model3DGroup { Transform = new MatrixTransform3D(project.World(p, frame, setup)) };
-            group.Children.Add(Geometry(p)); scene.Children.Add(group);
+            var group = new Model3DGroup { Transform = new MatrixTransform3D(entry.World) };
+            group.Children.Add(Geometry(entry.Part)); scene.Children.Add(group);
         }
         viewport.Children.Add(new ModelVisual3D { Content = scene });
     }

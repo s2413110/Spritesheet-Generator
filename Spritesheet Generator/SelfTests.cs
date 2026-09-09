@@ -10,6 +10,13 @@ internal static class SelfTests
 {
     public static int Run()
     {
+        System.Diagnostics.PresentationTraceSources.Refresh();
+        using var bindingMessages = new StringWriter();
+        using var bindingListener = new BindingTraceListener(bindingMessages);
+        var bindingTrace = System.Diagnostics.PresentationTraceSources.DataBindingSource;
+        var previousBindingLevel = bindingTrace.Switch.Level;
+        bindingTrace.Listeners.Add(bindingListener);
+        bindingTrace.Switch.Level = System.Diagnostics.SourceLevels.Warning;
         SynchronizationContext.SetSynchronizationContext(new System.Windows.Threading.DispatcherSynchronizationContext());
         var log = new List<string>(); var output = System.IO.Path.Combine(Environment.CurrentDirectory, "artifacts"); Directory.CreateDirectory(output);
         void Test(string name, Action test) { try { test(); log.Add("PASS " + name); } catch (Exception ex) { log.Add("FAIL " + name + ": " + ex); } }
@@ -115,10 +122,31 @@ internal static class SelfTests
             var recovered = new AutosaveStore(directory).Read(entries[0].Path);
             Assert(recovered.Project.ReferenceX == 20 && recovered.Frame == 7 && !recovered.Setup && recovered.SelectedId == p.Parts[0].Id && recovered.Project.Parts[0].Keys.Count > 0, "Recovery lost project or editing context across store instances.");
         });
+        WorkflowTests.Run(Test, output);
+        Test("WPF controls produce no binding warnings or errors", () =>
+        {
+            var editor = new EditorWindow(); Pump(editor.VerifyContainerLifecycleAsync()); editor.Close();
+            Pump(System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle).Task);
+            bindingListener.Flush();
+            File.WriteAllText(System.IO.Path.Combine(output, "binding-diagnostics.txt"), bindingMessages.ToString());
+            File.WriteAllText(System.IO.Path.Combine(output, "binding-first-stack.txt"), bindingListener.FirstErrorStack ?? "");
+            Assert(bindingMessages.GetStringBuilder().Length == 0, "WPF reported binding diagnostics. See artifacts/binding-diagnostics.txt.");
+        });
+        bindingTrace.Listeners.Remove(bindingListener); bindingTrace.Switch.Level = previousBindingLevel;
         File.WriteAllLines(System.IO.Path.Combine(output, "self-test-results.txt"), log); foreach (string line in log) Console.WriteLine(line);
         return log.Any(s => s.StartsWith("FAIL")) ? 1 : 0;
     }
     private static byte[] Pixels(BitmapSource bitmap) { var pixels = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4]; bitmap.CopyPixels(pixels, bitmap.PixelWidth * 4, 0); return pixels; }
+    private sealed class BindingTraceListener(TextWriter writer) : System.Diagnostics.TextWriterTraceListener(writer)
+    {
+        public string? FirstErrorStack { get; private set; }
+        public override void Write(string? message)
+        {
+            if (FirstErrorStack == null && message?.Contains("Cannot find source") == true) FirstErrorStack = Environment.StackTrace;
+            base.Write(message);
+        }
+        public override void WriteLine(string? message) { Write(message); base.WriteLine(""); }
+    }
     private static void Pump(Task task)
     {
         if (!task.IsCompleted)

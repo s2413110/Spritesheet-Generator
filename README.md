@@ -71,4 +71,6 @@ The self-test runner checks hierarchical transforms, 3D rest-pose preservation o
 
 Safety tests additionally cover undo across edit categories, canceled/no-op drags, keyboard routing, saved-state tracking, more than 30 history steps, undo inside export, the autosave timer (with an accelerated test clock), recovery of unnamed projects, unchanged-content skipping, deferred saves after drags, locked-file failures and retries, project switching during a write, atomic backups, and recovery when the newest copy is corrupt. Test recovery files stay under `artifacts/`; tests do not write to your normal recovery folder.
 
+WPF binding diagnostics are explicitly enabled during self-tests, including without a debugger. The suite checks list/dropdown container removal and reuse, and fails on binding warnings or errors. Diagnostic output is written to `artifacts/binding-diagnostics.txt`.
+
 Limits: 600 frames, 300 total bones/sprites, imported images up to 8192 px per side and 32 MB per file, and exported sheets up to 32 million pixels (16384 px per side maximum). Preview rendering can take time for large rigs or sheets.
